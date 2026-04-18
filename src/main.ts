@@ -12,8 +12,15 @@ const MODEL_URL =
 
 const INDEX_TIP = 8;
 const THUMB_TIP = 4;
-const PINCH_CLOSE = 0.052;
-const PINCH_OPEN = 0.074;
+const POINTER_SPREAD_ON = 0.07;
+const POINTER_SPREAD_OFF = 0.055;
+const INDEX_EXTEND_ON = 0.102;
+const INDEX_EXTEND_OFF = 0.084;
+const MIDDLE_EXTEND_ON = 0.098;
+const MIDDLE_EXTEND_OFF = 0.08;
+const SIZE_PINCH_MAX = 0.054;
+const SIZE_SLIDER_MIN = 2;
+const SIZE_SLIDER_MAX = 48;
 const HAND_LOST_FRAMES = 14;
 const BRUSH_SMOOTH = 0.42;
 
@@ -43,7 +50,7 @@ const HAND_BONES: readonly [number, number][] = [
   [13, 17],
 ];
 
-type PaintMode = "pinch" | "always";
+type PaintMode = "point" | "always";
 
 type Lm = { x: number; y: number };
 
@@ -52,9 +59,13 @@ function drawHandTracking(
   w: number,
   h: number,
   landmarks: Lm[][],
-  pinchTip: Lm,
-  pinchThumb: Lm,
-  pinching: boolean
+  indexTip: Lm,
+  thumbTip: Lm,
+  pointerPaint: boolean,
+  eraserActive: boolean,
+  fistClenched: boolean,
+  palmOpen: boolean,
+  paintMode: PaintMode
 ): void {
   hctx.clearRect(0, 0, w, h);
   if (!w || !h) return;
@@ -80,20 +91,35 @@ function drawHandTracking(
     hctx.fillStyle = "rgba(255, 255, 255, 0.92)";
     for (let i = 0; i < lm.length; i++) {
       const p = lm[i];
-      const rad = i === 8 || i === 4 ? 4.5 : 3.2;
+      const rad =
+        fistClenched || palmOpen || (i !== 8 && i !== 4) ? 3.2 : 4.5;
       hctx.beginPath();
       hctx.arc(p.x * w, p.y * h, rad, 0, Math.PI * 2);
       hctx.fill();
     }
   }
-  if (pinching) {
-    const mx = ((pinchTip.x + pinchThumb.x) * 0.5) * w;
-    const my = ((pinchTip.y + pinchThumb.y) * 0.5) * h;
-    const pr = dist2D(pinchTip, pinchThumb) * Math.min(w, h) * 0.5;
-    hctx.strokeStyle = "rgba(255, 220, 120, 0.95)";
+  if (eraserActive) {
+    const tx = thumbTip.x * w;
+    const ty = thumbTip.y * h;
+    const rr = Math.max(11, Math.min(w, h) * 0.03);
+    hctx.strokeStyle = "rgba(255, 180, 90, 0.95)";
     hctx.lineWidth = 2;
     hctx.beginPath();
-    hctx.arc(mx, my, Math.max(6, pr * 0.85), 0, Math.PI * 2);
+    hctx.arc(tx, ty, rr, 0, Math.PI * 2);
+    hctx.stroke();
+  } else if (
+    pointerPaint &&
+    paintMode === "point" &&
+    !fistClenched &&
+    !palmOpen
+  ) {
+    const tx = indexTip.x * w;
+    const ty = indexTip.y * h;
+    const rr = Math.max(10, Math.min(w, h) * 0.028);
+    hctx.strokeStyle = "rgba(120, 255, 200, 0.92)";
+    hctx.lineWidth = 2;
+    hctx.beginPath();
+    hctx.arc(tx, ty, rr, 0, Math.PI * 2);
     hctx.stroke();
   }
 }
@@ -105,6 +131,97 @@ function dist2D(
   const dx = a.x - b.x;
   const dy = a.y - b.y;
   return Math.hypot(dx, dy);
+}
+
+function thumbsUpStrong(lm: Lm[]): boolean {
+  const d04 = dist2D(lm[0], lm[4]);
+  const d08 = dist2D(lm[0], lm[8]);
+  const d58 = dist2D(lm[5], lm[8]);
+  const d912 = dist2D(lm[9], lm[12]);
+  return (
+    d04 > 0.115 &&
+    d04 > d08 * 1.08 &&
+    d58 < 0.095 &&
+    d912 < 0.09 &&
+    dist2D(lm[3], lm[4]) > 0.036
+  );
+}
+
+function thumbsUpWeak(lm: Lm[]): boolean {
+  const d04 = dist2D(lm[0], lm[4]);
+  const d08 = dist2D(lm[0], lm[8]);
+  const d58 = dist2D(lm[5], lm[8]);
+  const d912 = dist2D(lm[9], lm[12]);
+  return (
+    d04 > 0.098 &&
+    d04 > d08 * 1.02 &&
+    d58 < 0.108 &&
+    d912 < 0.098
+  );
+}
+
+function fistStrong(lm: Lm[]): boolean {
+  const d04 = dist2D(lm[0], lm[4]);
+  if (d04 > 0.112) return false;
+  const d08 = dist2D(lm[0], lm[8]);
+  const d012 = dist2D(lm[0], lm[12]);
+  const d016 = dist2D(lm[0], lm[16]);
+  const d020 = dist2D(lm[0], lm[20]);
+  return (
+    d08 < 0.096 &&
+    d012 < 0.096 &&
+    d016 < 0.102 &&
+    d020 < 0.102
+  );
+}
+
+function fistWeak(lm: Lm[]): boolean {
+  const d04 = dist2D(lm[0], lm[4]);
+  if (d04 > 0.125) return false;
+  const d08 = dist2D(lm[0], lm[8]);
+  const d012 = dist2D(lm[0], lm[12]);
+  const d016 = dist2D(lm[0], lm[16]);
+  const d020 = dist2D(lm[0], lm[20]);
+  return (
+    d08 < 0.112 &&
+    d012 < 0.112 &&
+    d016 < 0.118 &&
+    d020 < 0.118
+  );
+}
+
+function palmOpenStrong(lm: Lm[]): boolean {
+  const d58 = dist2D(lm[5], lm[8]);
+  const d912 = dist2D(lm[9], lm[12]);
+  const d1316 = dist2D(lm[13], lm[16]);
+  const d1720 = dist2D(lm[17], lm[20]);
+  const d04 = dist2D(lm[0], lm[4]);
+  const tip812 = dist2D(lm[8], lm[12]);
+  return (
+    d58 > 0.098 &&
+    d912 > 0.094 &&
+    d1316 > 0.086 &&
+    d1720 > 0.082 &&
+    d04 > 0.096 &&
+    tip812 > 0.062
+  );
+}
+
+function palmOpenWeak(lm: Lm[]): boolean {
+  const d58 = dist2D(lm[5], lm[8]);
+  const d912 = dist2D(lm[9], lm[12]);
+  const d1316 = dist2D(lm[13], lm[16]);
+  const d1720 = dist2D(lm[17], lm[20]);
+  const d04 = dist2D(lm[0], lm[4]);
+  const tip812 = dist2D(lm[8], lm[12]);
+  return (
+    d58 > 0.088 &&
+    d912 > 0.084 &&
+    d1316 > 0.078 &&
+    d1720 > 0.074 &&
+    d04 > 0.088 &&
+    tip812 > 0.052
+  );
 }
 
 function tipToClient(
@@ -153,7 +270,7 @@ function mount(): void {
     <div class="hud" aria-hidden="false">
       <div class="glass-panel">
         <div class="segmented" role="radiogroup" aria-label="Paint mode">
-          <label class="seg" title="Pinch to paint"><input type="radio" name="mode" value="pinch" checked /><span>P</span></label>
+          <label class="seg" title="Point: index and middle straight, thumb away from index"><input type="radio" name="mode" value="point" checked /><span>P</span></label>
           <label class="seg" title="Always paint"><input type="radio" name="mode" value="always" /><span>A</span></label>
         </div>
         <div class="list-group">
@@ -194,7 +311,7 @@ function mount(): void {
   const glassPanel = root.querySelector<HTMLDivElement>(".glass-panel")!;
   const clearBtn = root.querySelector<HTMLButtonElement>("#clear")!;
 
-  let paintMode: PaintMode = "pinch";
+  let paintMode: PaintMode = "point";
   root.querySelectorAll<HTMLInputElement>('input[name="mode"]').forEach((r) => {
     r.addEventListener("change", () => {
       if (r.checked) paintMode = r.value as PaintMode;
@@ -206,9 +323,18 @@ function mount(): void {
   let handLandmarker: HandLandmarker | null = null;
   let raf = 0;
   let vfcHandle = 0;
-  let prevPinch = false;
-  let pinchLatched = false;
+  let prevSizePinch = false;
+  let pointerLatched = false;
+  let eraserLatched = false;
+  let fistLatched = false;
+  let palmLatched = false;
+  let prevTool: "n" | "p" | "e" = "n";
   let handLostFrames = 0;
+  let wasFistAdjustPrev = false;
+  let fistRotPrevAng: number | null = null;
+  let fistRotStartSize = 14;
+  let fistRotAccum = 0;
+  let prevDualPalmOpen = false;
 
   function setSizeOpen(open: boolean): void {
     sizePopover.hidden = !open;
@@ -284,11 +410,16 @@ function mount(): void {
     }
   }
 
-  function strokeTo(x: number, y: number, draw: boolean): void {
-    const lw = Number(sizeInput.value);
+  function strokeTo(x: number, y: number, draw: boolean, erase: boolean): void {
+    const lwPaint = Math.max(
+      SIZE_SLIDER_MIN,
+      Math.min(SIZE_SLIDER_MAX, Number(sizeInput.value) || SIZE_SLIDER_MIN)
+    );
+    const lw = erase ? lwPaint * 2.5 : lwPaint;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-    ctx.strokeStyle = colorInput.value;
+    ctx.globalCompositeOperation = erase ? "destination-out" : "source-over";
+    ctx.strokeStyle = erase ? "rgba(0,0,0,0.55)" : colorInput.value;
     ctx.lineWidth = lw;
     if (draw && lastX != null && lastY != null) {
       const dx = x - lastX;
@@ -304,6 +435,7 @@ function mount(): void {
       }
       ctx.stroke();
     }
+    ctx.globalCompositeOperation = "source-over";
     if (draw) {
       lastX = x;
       lastY = y;
@@ -321,6 +453,7 @@ function mount(): void {
   clearBtn.addEventListener("click", () => {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     resetStroke();
+    prevTool = "n";
   });
 
   function scheduleFrame(): void {
@@ -352,15 +485,36 @@ function mount(): void {
         if (cw0 && ch0) {
           hctx.clearRect(0, 0, cw0, ch0);
         }
+        pointerLatched = false;
+        eraserLatched = false;
+        fistLatched = false;
+        palmLatched = false;
+        wasFistAdjustPrev = false;
+        fistRotPrevAng = null;
+        prevDualPalmOpen = false;
+        prevSizePinch = false;
         handLostFrames++;
         if (handLostFrames >= HAND_LOST_FRAMES) {
           resetStroke();
-          pinchLatched = false;
-          prevPinch = false;
+          prevTool = "n";
         }
         return;
       }
       handLostFrames = 0;
+      if (hands.length >= 2) {
+        const dualOpen =
+          palmOpenStrong(hands[0]) && palmOpenStrong(hands[1]);
+        if (dualOpen && !prevDualPalmOpen) {
+          if (canvas.width && canvas.height) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+          }
+          resetStroke();
+          prevTool = "n";
+        }
+        prevDualPalmOpen = dualOpen;
+      } else {
+        prevDualPalmOpen = false;
+      }
       const lm = hands[0];
       const tip = lm[INDEX_TIP];
       const thumb = lm[THUMB_TIP];
@@ -368,24 +522,110 @@ function mount(): void {
       const ch = canvas.height;
       const rawX = tip.x * cw;
       const rawY = tip.y * ch;
-      const dThumb = dist2D(tip, thumb);
-      if (pinchLatched) {
-        if (dThumb > PINCH_OPEN) pinchLatched = false;
+      const thumbIndexSpread = dist2D(tip, thumb);
+      const indexExtend = dist2D(lm[5], tip);
+      const middleExtend = dist2D(lm[9], lm[12]);
+      if (pointerLatched) {
+        if (
+          thumbIndexSpread < POINTER_SPREAD_OFF ||
+          indexExtend < INDEX_EXTEND_OFF ||
+          middleExtend < MIDDLE_EXTEND_OFF
+        ) {
+          pointerLatched = false;
+        }
       } else {
-        if (dThumb < PINCH_CLOSE) pinchLatched = true;
+        if (
+          thumbIndexSpread > POINTER_SPREAD_ON &&
+          indexExtend > INDEX_EXTEND_ON &&
+          middleExtend > MIDDLE_EXTEND_ON
+        ) {
+          pointerLatched = true;
+        }
       }
-      const pinching = pinchLatched;
+      const pointerPaint = pointerLatched;
+      if (eraserLatched) {
+        if (!thumbsUpWeak(lm)) eraserLatched = false;
+      } else {
+        if (thumbsUpStrong(lm)) eraserLatched = true;
+      }
+      const erasing = eraserLatched;
+      if (fistLatched) {
+        if (!fistWeak(lm)) fistLatched = false;
+      } else {
+        if (fistStrong(lm)) fistLatched = true;
+      }
+      const fistClenched = fistLatched;
+      if (palmLatched) {
+        if (!palmOpenWeak(lm)) palmLatched = false;
+      } else {
+        if (palmOpenStrong(lm)) palmLatched = true;
+      }
+      const palmOpen = palmLatched;
+      const fistNow = fistClenched;
+      if (fistNow && !erasing) {
+        if (!wasFistAdjustPrev) {
+          fistRotStartSize = Math.max(
+            SIZE_SLIDER_MIN,
+            Math.min(
+              SIZE_SLIDER_MAX,
+              Number(sizeInput.value) || SIZE_SLIDER_MIN
+            )
+          );
+          fistRotAccum = 0;
+          fistRotPrevAng = null;
+        }
+        const ang = Math.atan2(lm[9].y - lm[0].y, lm[9].x - lm[0].x);
+        if (fistRotPrevAng !== null) {
+          let d = ang - fistRotPrevAng;
+          if (d > Math.PI) d -= 2 * Math.PI;
+          if (d < -Math.PI) d += 2 * Math.PI;
+          fistRotAccum += d;
+          const span = SIZE_SLIDER_MAX - SIZE_SLIDER_MIN;
+          const sens = span / (2 * Math.PI);
+          const next = Math.max(
+            SIZE_SLIDER_MIN,
+            Math.min(
+              SIZE_SLIDER_MAX,
+              Math.round(fistRotStartSize + fistRotAccum * sens)
+            )
+          );
+          sizeInput.value = String(next);
+        }
+        fistRotPrevAng = ang;
+        wasFistAdjustPrev = true;
+      } else {
+        fistRotPrevAng = null;
+        wasFistAdjustPrev = false;
+      }
       const tipClient = tipToClient(video, tip);
       const tr = sizeTrigger.getBoundingClientRect();
       const onSizeIcon = pointInRectPad(tipClient.x, tipClient.y, tr, 14);
-      if (!prevPinch && pinching && onSizeIcon) {
+      const sizePinch = thumbIndexSpread < SIZE_PINCH_MAX;
+      if (!prevSizePinch && sizePinch && onSizeIcon) {
         setSizeOpen(sizePopover.hidden);
       }
-      const suppressDraw = pinching && onSizeIcon;
+      const suppressDraw = sizePinch && onSizeIcon;
       if (!suppressDraw) {
-        const shouldDraw =
-          paintMode === "always" ? true : pinching;
-        if (shouldDraw) {
+        const painting =
+          !erasing &&
+          !fistClenched &&
+          !palmOpen &&
+          (paintMode === "always" || pointerPaint);
+        const tool: "n" | "p" | "e" = erasing ? "e" : painting ? "p" : "n";
+        if (tool !== prevTool) resetStroke();
+        prevTool = tool;
+        if (erasing) {
+          const rawTx = thumb.x * cw;
+          const rawTy = thumb.y * ch;
+          let px = rawTx;
+          let py = rawTy;
+          if (lastX != null && lastY != null) {
+            const a = BRUSH_SMOOTH;
+            px = lastX + (rawTx - lastX) * a;
+            py = lastY + (rawTy - lastY) * a;
+          }
+          strokeTo(px, py, true, true);
+        } else if (painting) {
           let px = rawX;
           let py = rawY;
           if (lastX != null && lastY != null) {
@@ -393,14 +633,15 @@ function mount(): void {
             px = lastX + (rawX - lastX) * a;
             py = lastY + (rawY - lastY) * a;
           }
-          strokeTo(px, py, true);
+          strokeTo(px, py, true, false);
         } else {
-          strokeTo(0, 0, false);
+          strokeTo(0, 0, false, false);
         }
       } else {
         resetStroke();
+        prevTool = "n";
       }
-      prevPinch = pinching;
+      prevSizePinch = sizePinch;
       drawHandTracking(
         hctx,
         cw,
@@ -408,7 +649,11 @@ function mount(): void {
         hands as Lm[][],
         tip,
         thumb,
-        pinching
+        pointerPaint,
+        erasing,
+        fistClenched,
+        palmOpen,
+        paintMode
       );
     } finally {
       scheduleFrame();
